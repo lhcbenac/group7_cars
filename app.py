@@ -103,9 +103,9 @@ elif page == "Classification":
     st.write("Train classifiers to predict car sale status based on features. Upload new data to predict outcomes.")
 
     # Target: Sold or Not (1 = Sold, 0 = Not Sold)
-    df_cls = df.dropna(subset=["CarSaleStatus"])
+    df_cls = df.dropna(subset=["Energy"])
     # Label encode
-    y = df_cls["CarSaleStatus"].astype("category").cat.codes
+    y = df_cls["Energy"].astype("category").cat.codes
 
     if len(np.unique(y)) < 2:
         st.error("Not enough data for classification! Both classes must be present in the data. Please check your data.")

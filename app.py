@@ -23,7 +23,7 @@ st.set_page_config(page_title="Used Car Inventory Procurement Tool", layout="wid
 # ---- DATA LOADING ----
 @st.cache_data
 def load_data():
-    df = pd.read_excel("data/cleaned_data.xlsx", sheet_name="cleaned data")
+    df = pd.read_excel("cleaned_data.xlsx", sheet_name="cleaned data")
     return df
 
 df = load_data()

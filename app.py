@@ -98,17 +98,29 @@ if page == "Data Visualization":
     csv = filtered.to_csv(index=False).encode('utf-8')
     st.download_button("Download Filtered Data", csv, "filtered_inventory.csv", "text/csv")
 
-elif page == "Classification":
-    st.header("🤖 Sales Success Classification")
-    st.write("Train classifiers to predict car sale status based on features. Upload new data to predict outcomes.")
 
-    # Target: Sold or Not (1 = Sold, 0 = Not Sold)
+
+
+#----------------
+#--------------
+
+
+
+
+elif page == "Classification":
+    st.header("🔋 Car Energy Type Classification")
+    st.write("Train classifiers to predict the 'Energy' type of a car (e.g., Petrol, Diesel, Electric, Hybrid) based on car features. Upload new data to predict energy type.")
+
+    # Use only rows with Energy present
     df_cls = df.dropna(subset=["Energy"])
-    # Label encode
-    y = df_cls["Energy"].astype("category").cat.codes
+    # Label encode Energy (store mapping for inverse transform)
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    y = le.fit_transform(df_cls["Energy"])
+    class_names = le.classes_
 
     if len(np.unique(y)) < 2:
-        st.error("Not enough data for classification! Both classes must be present in the data. Please check your data.")
+        st.error("Not enough classes for classification! You must have at least 2 unique values in the 'Energy' column.")
     else:
         features = [
             "CarType", "Location", "ManufacturerName", "Color", "Gearbox",
@@ -117,21 +129,18 @@ elif page == "Classification":
         ]
         X = pd.get_dummies(df_cls[features], drop_first=True)
 
-        # Do a stratified split so both train and test have both classes (if possible)
         try:
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
             )
         except ValueError:
-            st.error("Train/test split failed: one set ended up with only a single class. Try with more data or adjust your filters.")
+            st.error("Train/test split failed: Not enough samples for all classes in both sets. Please check your data.")
             st.stop()
 
-        # Now check classes again for train and test
         if len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
-            st.error("After splitting, one of the sets has only one class. Try with more data or check your filters.")
+            st.error("After splitting, one of the sets has only one class. Please check your data or try again with more data.")
             st.stop()
 
-        # --- scaling
         scaler = StandardScaler().fit(X_train)
         X_train_sc, X_test_sc = scaler.transform(X_train), scaler.transform(X_test)
 
@@ -142,57 +151,72 @@ elif page == "Classification":
             "Gradient Boosting": GradientBoostingClassifier(random_state=42)
         }
 
+        # Metrics: accuracy, precision, recall, f1 (all macro-averaged for multiclass)
+        from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score
         results, probs = {}, {}
         for name, mdl in models.items():
             if name == "KNN":
                 mdl.fit(X_train_sc, y_train)
                 preds = mdl.predict(X_test_sc)
-                proba = mdl.predict_proba(X_test_sc)
+                try:
+                    proba = mdl.predict_proba(X_test_sc)
+                except:
+                    proba = None
             else:
                 mdl.fit(X_train, y_train)
                 preds = mdl.predict(X_test)
-                proba = mdl.predict_proba(X_test)
+                try:
+                    proba = mdl.predict_proba(X_test)
+                except:
+                    proba = None
 
-            # Pick probability of class 1 (sold), handle proba shape
-            if proba.shape[1] == 2:
-                probs[name] = proba[:, 1]
-            else:
-                probs[name] = None
+            # For multiclass ROC, you need probabilities for each class.
+            probs[name] = proba
 
             results[name] = [
                 accuracy_score(y_test, preds),
-                precision_score(y_test, preds, zero_division=0),
-                recall_score(y_test, preds, zero_division=0),
-                f1_score(y_test, preds, zero_division=0)
+                precision_score(y_test, preds, average="macro", zero_division=0),
+                recall_score(y_test, preds, average="macro", zero_division=0),
+                f1_score(y_test, preds, average="macro", zero_division=0)
             ]
 
-        res_df = pd.DataFrame(results, index=["Accuracy", "Precision", "Recall", "F1"]).T
+        res_df = pd.DataFrame(results, index=["Accuracy", "Precision", "Recall", "F1 (macro)"]).T
         st.dataframe(res_df.style.background_gradient(axis=0, cmap="Greens"))
 
         sel_model = st.selectbox("Show Confusion Matrix for:", list(models.keys()))
         mdl = models[sel_model]
         y_pred = mdl.predict(X_test_sc if sel_model == "KNN" else X_test)
         cm = confusion_matrix(y_test, y_pred)
-        fig_cm, ax_cm = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm)
+        fig_cm, ax_cm = plt.subplots(figsize=(7, 5))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm, xticklabels=class_names, yticklabels=class_names)
         ax_cm.set_xlabel("Predicted"); ax_cm.set_ylabel("Actual")
         st.pyplot(fig_cm)
-        st.markdown("> **Insight:** The confusion matrix shows the number of correct and incorrect predictions for car sales status.")
+        st.markdown("> **Insight:** Confusion matrix shows correct vs. incorrect predictions for each Energy type.")
 
-        st.subheader("ROC Curves")
-        fig_roc, ax_roc = plt.subplots()
+        st.subheader("ROC Curves (One-vs-Rest, macro-average AUC)")
+        # For multiclass, plot ROC curve for each class (one-vs-rest)
+        from sklearn.preprocessing import label_binarize
+        import matplotlib.pyplot as plt
+
+        n_classes = len(class_names)
+        y_test_bin = label_binarize(y_test, classes=range(n_classes))
+        fig_roc, ax_roc = plt.subplots(figsize=(7, 5))
         for name, pr in probs.items():
-            if pr is not None:
-                fpr, tpr, _ = roc_curve(y_test, pr)
-                ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.2f})")
-        ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray")
-        ax_roc.legend()
+            if pr is not None and pr.shape[1] == n_classes:
+                macro_roc_auc_ovo = roc_auc_score(y_test_bin, pr, average="macro", multi_class="ovr")
+                for i in range(n_classes):
+                    fpr, tpr, _ = roc_curve(y_test_bin[:, i], pr[:, i])
+                    ax_roc.plot(fpr, tpr, label=f"{name} - {class_names[i]}")
+                ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray")
+                ax_roc.set_title(f"Multiclass ROC (macro-avg AUC {name}: {macro_roc_auc_ovo:.2f})")
+                ax_roc.legend(fontsize="small")
+                break  # Only show for first model (avoid clutter)
         st.pyplot(fig_roc)
-        st.markdown("> **Insight:** ROC curve compares true vs. false positive rate for all classifiers.")
+        st.markdown("> **Insight:** ROC curves show the ability to separate each Energy type vs. the rest.")
 
         st.markdown("---")
-        st.subheader("Upload New Data to Predict Sale Status")
-        new_file = st.file_uploader("Upload Excel/CSV (no 'CarSaleStatus' column required)", type=["csv", "xlsx"])
+        st.subheader("Upload New Data to Predict Energy Type")
+        new_file = st.file_uploader("Upload Excel/CSV (no 'Energy' column required)", type=["csv", "xlsx"])
         if new_file:
             if new_file.name.endswith("csv"):
                 new_data = pd.read_csv(new_file)
@@ -202,11 +226,10 @@ elif page == "Classification":
             new_X = new_X.reindex(columns=X.columns, fill_value=0)
             new_X_sc = scaler.transform(new_X)
             pred_label = models["Random Forest"].predict(new_X_sc)
-            new_data["PredictedSaleStatus"] = pred_label
+            new_data["PredictedEnergy"] = le.inverse_transform(pred_label)
             st.dataframe(new_data)
             csv_out = new_data.to_csv(index=False).encode('utf-8')
-            st.download_button("Download Results", csv_out, "predicted_sales.csv", "text/csv")
-
+            st.download_button("Download Results", csv_out, "predicted_energy.csv", "text/csv")
 # ---- 3. CLUSTERING ----
 elif page == "Clustering":
     st.header("🎯 Customer/Car Segmentation (K-Means Clustering)")

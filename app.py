@@ -98,19 +98,24 @@ if page == "Data Visualization":
     csv = filtered.to_csv(index=False).encode('utf-8')
     st.download_button("Download Filtered Data", csv, "filtered_inventory.csv", "text/csv")
 
-# ---- 2. CLASSIFICATION ----
 elif page == "Classification":
     st.header("🤖 Sales Success Classification")
     st.write("Train classifiers to predict car sale status based on features. Upload new data to predict outcomes.")
-    # Target definition: Sold or Not
+
+    # Target: Sold or Not (1 = Sold, 0 = Not Sold)
     df_cls = df.dropna(subset=["CarSaleStatus"])
     y = df_cls["CarSaleStatus"].astype("category").cat.codes  # 1=sold, 0=unsold
 
-    features = ["CarType", "Location", "ManufacturerName", "Color", "Gearbox",
-                "ManufacturedYear", "MileageKM", "EnginePowerHP", "Price", "PurchasedPrice", "ProfitMargin", "SaleVolume"]
+    features = [
+        "CarType", "Location", "ManufacturerName", "Color", "Gearbox",
+        "ManufacturedYear", "MileageKM", "EnginePowerHP", "Price",
+        "PurchasedPrice", "ProfitMargin", "SaleVolume"
+    ]
     X = pd.get_dummies(df_cls[features], drop_first=True)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y if len(np.unique(y)) > 1 else None
+    )
     scaler = StandardScaler().fit(X_train)
     X_train_sc, X_test_sc = scaler.transform(X_train), scaler.transform(X_test)
 
@@ -120,20 +125,40 @@ elif page == "Classification":
         "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
         "Gradient Boosting": GradientBoostingClassifier(random_state=42)
     }
+
     results, probs = {}, {}
     for name, mdl in models.items():
+        # Train
         if name == "KNN":
             mdl.fit(X_train_sc, y_train)
             preds = mdl.predict(X_test_sc)
-            probs[name] = mdl.predict_proba(X_test_sc)[:, 1]
+            if len(np.unique(y_test)) > 1:
+                proba = mdl.predict_proba(X_test_sc)
+                # Always pick the column for class '1' (sold) if present
+                if proba.shape[1] == 2:
+                    probs[name] = proba[:, 1]
+                else:
+                    probs[name] = None
+            else:
+                probs[name] = None
         else:
             mdl.fit(X_train, y_train)
             preds = mdl.predict(X_test)
-            probs[name] = mdl.predict_proba(X_test)[:, 1]
+            if len(np.unique(y_test)) > 1:
+                proba = mdl.predict_proba(X_test)
+                if proba.shape[1] == 2:
+                    probs[name] = proba[:, 1]
+                else:
+                    probs[name] = None
+            else:
+                probs[name] = None
         results[name] = [
-            accuracy_score(y_test, preds), precision_score(y_test, preds, zero_division=0),
-            recall_score(y_test, preds, zero_division=0), f1_score(y_test, preds, zero_division=0)
+            accuracy_score(y_test, preds),
+            precision_score(y_test, preds, zero_division=0),
+            recall_score(y_test, preds, zero_division=0),
+            f1_score(y_test, preds, zero_division=0)
         ]
+
     # Results Table
     res_df = pd.DataFrame(results, index=["Accuracy", "Precision", "Recall", "F1"]).T
     st.dataframe(res_df.style.background_gradient(axis=0, cmap="Greens"))
@@ -147,18 +172,22 @@ elif page == "Classification":
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax_cm)
     ax_cm.set_xlabel("Predicted"); ax_cm.set_ylabel("Actual")
     st.pyplot(fig_cm)
-    add_description("The confusion matrix shows the number of correct and incorrect predictions for car sales status.")
+    st.markdown("> **Insight:** The confusion matrix shows the number of correct and incorrect predictions for car sales status.")
 
-    # ROC curve for all
+    # ROC curve for all (only if both classes present)
     st.subheader("ROC Curves")
-    fig_roc, ax_roc = plt.subplots()
-    for name, pr in probs.items():
-        fpr, tpr, _ = roc_curve(y_test, pr)
-        ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.2f})")
-    ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray")
-    ax_roc.legend()
-    st.pyplot(fig_roc)
-    add_description("ROC curve compares true vs. false positive rate for all classifiers.")
+    if len(np.unique(y_test)) > 1:
+        fig_roc, ax_roc = plt.subplots()
+        for name, pr in probs.items():
+            if pr is not None:
+                fpr, tpr, _ = roc_curve(y_test, pr)
+                ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.2f})")
+        ax_roc.plot([0, 1], [0, 1], linestyle="--", color="gray")
+        ax_roc.legend()
+        st.pyplot(fig_roc)
+        st.markdown("> **Insight:** ROC curve compares true vs. false positive rate for all classifiers.")
+    else:
+        st.warning("ROC curve requires both classes in the test set. Please check your data split or add more data.")
 
     # Upload and Predict on New Data
     st.markdown("---")
